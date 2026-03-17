@@ -39,10 +39,12 @@ package editor_plugin
 import (
 	"encoding/json"
 	"fmt"
-	"kaijuengine.com/platform/filesystem"
-	"kaijuengine.com/platform/profiler/tracing"
 	"os"
 	"path/filepath"
+	"strings"
+
+	"kaijuengine.com/platform/filesystem"
+	"kaijuengine.com/platform/profiler/tracing"
 )
 
 const (
@@ -145,6 +147,8 @@ func PluginsFolder() (string, error) {
 func AvailablePlugins() []PluginInfo {
 	defer tracing.NewRegion("editor_plugin.AvailablePlugins").End()
 	plugs := []PluginInfo{}
+
+	// Get local plugins from plugins folder
 	plugFolder, err := PluginsFolder()
 	if err != nil {
 		return plugs
@@ -179,10 +183,46 @@ func AvailablePlugins() []PluginInfo {
 		f.Close()
 	}
 
+	// Add Git plugins from storage as virtual entries
+	if gitPlugins, err := GetStoredGitPlugins(); err == nil {
+		for _, gitPlugin := range gitPlugins {
+			// Parse module@version format
+			parts := strings.Split(gitPlugin, "@")
+			if len(parts) == 2 {
+				module := parts[0]
+
+				// Extract package name from module path (last part)
+				pathParts := strings.Split(module, "/")
+				packageName := pathParts[len(pathParts)-1]
+
+				// Create virtual plugin config for Git plugin
+				cfg := PluginConfig{
+					Name:        fmt.Sprintf("Git Plugin: %s", packageName),
+					PackageName: packageName,
+					Description: fmt.Sprintf("Git plugin from %s", module),
+					Version:     0.0, // Git plugins don't have config version
+					Author:      "Git Repository",
+					Website:     fmt.Sprintf("https://%s", module),
+					Enabled:     true, // Git plugins are enabled by being in storage
+				}
+
+				plugs = append(plugs, PluginInfo{
+					Path:   fmt.Sprintf("git://%s", gitPlugin), // Virtual path to identify Git plugins
+					Config: cfg,
+				})
+			}
+		}
+	}
+
 	return plugs
 }
 
 func UpdatePluginConfigState(info PluginInfo) error {
+	// Skip Git plugins - they don't have physical config files to update
+	if strings.HasPrefix(info.Path, "git://") {
+		return nil
+	}
+
 	f, err := os.Create(filepath.Join(info.Path, pluginConfigFile))
 	if err != nil {
 		return err

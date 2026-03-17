@@ -40,15 +40,16 @@ import (
 	"fmt"
 	"io"
 	"io/fs"
-	"kaijuengine.com/build"
-	"kaijuengine.com/editor/editor_plugin"
-	"kaijuengine.com/editor/project/project_file_system"
-	"kaijuengine.com/platform/filesystem"
 	"log/slog"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"strings"
+
+	"kaijuengine.com/build"
+	"kaijuengine.com/editor/editor_plugin"
+	"kaijuengine.com/editor/project/project_file_system"
+	"kaijuengine.com/platform/filesystem"
 )
 
 var editorPluginRegistry = map[string]editor_plugin.EditorPlugin{}
@@ -76,6 +77,12 @@ func (ed *Editor) RecompileWithPlugins(plugins []editor_plugin.PluginInfo, onCom
 	if err = copyEditorCodeForRecompile(to, project_file_system.EngineFS.EngineFileSystemInterface); err != nil {
 		return err
 	}
+	if !hasGoFiles(filepath.Join(to, "editor")) {
+		slog.Warn("embedded source copy is missing editor package files, retrying from disk", "source", filepath.Dir(exe))
+		if err = copyEditorCodeForRecompileFromDisk(to, filepath.Dir(exe)); err != nil {
+			return err
+		}
+	}
 	registry, err := os.OpenFile(filepath.Join(to, "editor_plugin_registry.go"), os.O_APPEND, os.ModePerm)
 	if err != nil {
 		return err
@@ -87,9 +94,31 @@ func (ed *Editor) RecompileWithPlugins(plugins []editor_plugin.PluginInfo, onCom
 		if !plugins[i].Config.Enabled {
 			continue
 		}
+		if strings.HasPrefix(plugins[i].Path, "git://") {
+			moduleRef := strings.TrimPrefix(plugins[i].Path, "git://")
+			modulePath := strings.Split(moduleRef, "@")[0]
+
+			getCmd := exec.Command("go", "get", moduleRef)
+			getCmd.Dir = to
+			if output, getErr := getCmd.CombinedOutput(); getErr != nil {
+				slog.Error("failed to get git plugin module", "module", moduleRef, "error", getErr, "output", string(output))
+				return getErr
+			}
+
+			registry.WriteString(fmt.Sprintf("\t_ \"%s\"\n", modulePath))
+			continue
+		}
 		dstName := plugins[i].Config.PackageName
 		dst := filepath.Join(to, "editor/editor_plugin/developer_plugins", dstName)
-		filesystem.CopyDirectory(plugins[i].Path, dst)
+		if err = filesystem.CopyDirectory(plugins[i].Path, dst); err != nil {
+			slog.Error("failed to copy plugin directory", "source", plugins[i].Path, "destination", dst, "error", err)
+			return err
+		}
+
+		// Delete go.mod and go.sum from plugin
+		// os.Remove(filepath.Join(dst, "go.mod"))
+		// os.Remove(filepath.Join(dst, "go.sum"))
+
 		registry.WriteString(fmt.Sprintf("\t_ \"kaijuengine.com/editor/editor_plugin/developer_plugins/%s\"\n", dstName))
 		if err = editor_plugin.UpdatePluginConfigState(plugins[i]); err != nil {
 			slog.Warn("failed to update the enabled state of the plugin",
@@ -97,6 +126,7 @@ func (ed *Editor) RecompileWithPlugins(plugins []editor_plugin.PluginInfo, onCom
 		}
 	}
 	registry.WriteString(")\n")
+
 	// Run compile of the editor
 	var cmd *exec.Cmd
 	if build.Debug {
@@ -105,14 +135,20 @@ func (ed *Editor) RecompileWithPlugins(plugins []editor_plugin.PluginInfo, onCom
 		cmd = exec.Command("go", "build", "-tags=editor", "-o", filepath.Base(exe), ".")
 	}
 	cmd.Dir = to
+
+	// Capture output for better error reporting
+	var buildOutput strings.Builder
+	cmd.Stdout = &buildOutput
+	cmd.Stderr = &buildOutput
+
 	if err := cmd.Start(); err != nil {
 		return err
 	}
 	go func() {
 		defer onComplete(err)
-		// TODO:  Add better error messaging for failed compile
-		if err = cmd.Wait(); err != nil {
-			slog.Error("failed to compile the editor with the plugins", "error", err)
+		err = cmd.Wait()
+		if err != nil {
+			slog.Error("failed to compile the editor with the plugins", "error", err, "output", buildOutput.String())
 			return
 		}
 		// Launch the generators/plugin_installer/main.go
@@ -139,7 +175,7 @@ func copyEditorCodeForRecompile(to string, efs project_file_system.EngineFileSys
 		relPath, _ := filepath.Rel(from, path)
 		folder := filepath.Join(to, relPath)
 		if path != "." {
-			if err := os.Mkdir(folder, os.ModePerm); err != nil {
+			if err := os.MkdirAll(folder, os.ModePerm); err != nil {
 				return err
 			}
 		}
@@ -178,4 +214,72 @@ func copyEditorCodeForRecompile(to string, efs project_file_system.EngineFileSys
 	}
 	copyFolder(from)
 	return err
+}
+
+func copyEditorCodeForRecompileFromDisk(to, from string) error {
+	var err error
+	var copyFolder func(path string) error
+	os.RemoveAll(to)
+	os.MkdirAll(to, os.ModePerm)
+	copyFolder = func(path string) error {
+		relPath, _ := filepath.Rel(from, path)
+		folder := filepath.Join(to, relPath)
+		if path != from {
+			if err := os.MkdirAll(folder, os.ModePerm); err != nil {
+				return err
+			}
+		}
+		var dir []fs.DirEntry
+		if dir, err = os.ReadDir(path); err != nil {
+			return err
+		}
+		for i := range dir {
+			name := dir[i].Name()
+			entryPath := filepath.Join(path, name)
+			if dir[i].IsDir() {
+				if err := copyFolder(entryPath); err != nil {
+					return err
+				}
+				continue
+			}
+			if strings.HasPrefix(name, "__") {
+				continue
+			}
+			f, err := os.Open(entryPath)
+			if err != nil {
+				return err
+			}
+			defer f.Close()
+			t, err := os.Create(filepath.Join(folder, name))
+			if err != nil {
+				return err
+			}
+			defer t.Close()
+			if _, err := io.Copy(t, f); err != nil {
+				return err
+			}
+		}
+		return nil
+	}
+	return copyFolder(from)
+}
+
+func hasGoFiles(root string) bool {
+	entries, err := os.ReadDir(root)
+	if err != nil {
+		return false
+	}
+	for _, entry := range entries {
+		entryPath := filepath.Join(root, entry.Name())
+		if entry.IsDir() {
+			if hasGoFiles(entryPath) {
+				return true
+			}
+			continue
+		}
+		if strings.HasSuffix(entry.Name(), ".go") {
+			return true
+		}
+	}
+	return false
 }
