@@ -63,7 +63,6 @@ func RegisterPlugin(key string, plugin editor_plugin.EditorPlugin) {
 }
 
 func (ed *Editor) RecompileWithPlugins(plugins []editor_plugin.PluginInfo, onComplete func(err error)) error {
-	// Copy editor source to build folder
 	exe, err := os.Executable()
 	if err != nil {
 		return err
@@ -89,7 +88,6 @@ func (ed *Editor) RecompileWithPlugins(plugins []editor_plugin.PluginInfo, onCom
 	}
 	defer registry.Close()
 	registry.WriteString("\nimport (\n")
-	// Copy each enabled plugin into editor/editor_plugin/developer_plugins
 	for i := range plugins {
 		if !plugins[i].Config.Enabled {
 			continue
@@ -114,10 +112,8 @@ func (ed *Editor) RecompileWithPlugins(plugins []editor_plugin.PluginInfo, onCom
 			slog.Error("failed to copy plugin directory", "source", plugins[i].Path, "destination", dst, "error", err)
 			return err
 		}
-
-		// Delete go.mod and go.sum from plugin
-		// os.Remove(filepath.Join(dst, "go.mod"))
-		// os.Remove(filepath.Join(dst, "go.sum"))
+		os.Remove(filepath.Join(dst, "go.mod"))
+		os.Remove(filepath.Join(dst, "go.sum"))
 
 		registry.WriteString(fmt.Sprintf("\t_ \"kaijuengine.com/editor/editor_plugin/developer_plugins/%s\"\n", dstName))
 		if err = editor_plugin.UpdatePluginConfigState(plugins[i]); err != nil {
@@ -127,7 +123,6 @@ func (ed *Editor) RecompileWithPlugins(plugins []editor_plugin.PluginInfo, onCom
 	}
 	registry.WriteString(")\n")
 
-	// Run compile of the editor
 	var cmd *exec.Cmd
 	if build.Debug {
 		cmd = exec.Command("go", "build", "-tags=debug,editor", "-o", filepath.Base(exe), ".")
@@ -136,7 +131,6 @@ func (ed *Editor) RecompileWithPlugins(plugins []editor_plugin.PluginInfo, onCom
 	}
 	cmd.Dir = to
 
-	// Capture output for better error reporting
 	var buildOutput strings.Builder
 	cmd.Stdout = &buildOutput
 	cmd.Stderr = &buildOutput
@@ -151,7 +145,6 @@ func (ed *Editor) RecompileWithPlugins(plugins []editor_plugin.PluginInfo, onCom
 			slog.Error("failed to compile the editor with the plugins", "error", err, "output", buildOutput.String())
 			return
 		}
-		// Launch the generators/plugin_installer/main.go
 		toExe := filepath.Join(to, filepath.Base(exe))
 		boot := exec.Command("go", "run", "generators/plugin_installer/main.go", exe, toExe)
 		boot.Dir = to

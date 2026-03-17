@@ -246,6 +246,10 @@ func (w *SettingsWorkspace) downloadPluginFromGit(e *document.Element) {
 		slog.Warn("a plugin download is already in progress, please wait")
 		return
 	}
+	if w.recompiling {
+		slog.Warn("the editor is already in the process of recompiling, please wait")
+		return
+	}
 
 	// Get Git URL from the input field
 	gitUrlElement, found := w.Doc.GetElementById("gitPluginUrl")
@@ -284,10 +288,10 @@ func (w *SettingsWorkspace) downloadPluginFromGit(e *document.Element) {
 		return
 	}
 
-	// Update status and prepare for recompilation
+	// Update status before recompilation
 	if statusElement, found := w.Doc.GetElementById("pluginDownloadStatus"); found && statusElement.UI != nil {
 		if innerLabel := statusElement.InnerLabel(); innerLabel != nil {
-			innerLabel.SetText("Git plugin '" + modulePath + "' will be added during next recompilation. Click 'Recompile Editor' to install it.")
+			innerLabel.SetText("Git plugin '" + modulePath + "' added. Recompiling editor...")
 		}
 	}
 
@@ -296,11 +300,38 @@ func (w *SettingsWorkspace) downloadPluginFromGit(e *document.Element) {
 		urlElement.UI.ToInput().SetText("")
 	}
 
-	// Refresh the plugins list to show the newly added plugin
+	// Refresh the plugins list and recompile immediately
 	w.plugins = editor_plugin.AvailablePlugins()
+	w.pluginInitStates = make([]bool, len(w.plugins))
+	for i := range w.plugins {
+		w.pluginInitStates[i] = w.plugins[i].Config.Enabled
+	}
+
+	w.recompiling = true
+	if err := w.editor.RecompileWithPlugins(w.plugins, func(err error) {
+		w.recompiling = false
+		if err != nil {
+			slog.Error("failed to compile the editor", "error", err)
+			if statusElement, found := w.Doc.GetElementById("pluginDownloadStatus"); found && statusElement.UI != nil {
+				if innerLabel := statusElement.InnerLabel(); innerLabel != nil {
+					innerLabel.SetText("Failed to compile editor: " + err.Error())
+				}
+			}
+		}
+	}); err != nil {
+		w.recompiling = false
+		w.downloadingPlugin = false
+		slog.Error("failed to compile the editor", "error", err)
+		if statusElement, found := w.Doc.GetElementById("pluginDownloadStatus"); found && statusElement.UI != nil {
+			if innerLabel := statusElement.InnerLabel(); innerLabel != nil {
+				innerLabel.SetText("Failed to compile editor: " + err.Error())
+			}
+		}
+		return
+	}
 
 	w.downloadingPlugin = false
-	slog.Info("Git plugin queued for installation", "module", modulePath)
+	slog.Info("Git plugin added and recompilation started", "module", modulePath)
 }
 
 func (w *SettingsWorkspace) uiData() settingsWorkspaceData {
