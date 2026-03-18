@@ -1,3 +1,39 @@
+/******************************************************************************/
+/* plugin_installer.go                                                        */
+/******************************************************************************/
+/*                            This file is part of                            */
+/*                                KAIJU ENGINE                                */
+/*                          https://kaijuengine.com/                          */
+/******************************************************************************/
+/* MIT License                                                                */
+/*                                                                            */
+/* Copyright (c) 2023-present Kaiju Engine authors (AUTHORS.md).              */
+/* Copyright (c) 2015-present Brent Farris.                                   */
+/*                                                                            */
+/* May all those that this source may reach be blessed by the LORD and find   */
+/* peace and joy in life.                                                     */
+/* Everyone who drinks of this water will be thirsty again; but whoever       */
+/* drinks of the water that I will give him shall never thirst; John 4:13-14  */
+/*                                                                            */
+/* Permission is hereby granted, free of charge, to any person obtaining a    */
+/* copy of this software and associated documentation files (the "Software"), */
+/* to deal in the Software without restriction, including without limitation  */
+/* the rights to use, copy, modify, merge, publish, distribute, sublicense,   */
+/* and/or sell copies of the Software, and to permit persons to whom the      */
+/* Software is furnished to do so, subject to the following conditions:       */
+/*                                                                            */
+/* The above copyright notice and this permission notice shall be included in */
+/* all copies or substantial portions of the Software.                        */
+/*                                                                            */
+/* THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS    */
+/* OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF                 */
+/* MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT.     */
+/* IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY       */
+/* CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT  */
+/* OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE      */
+/* OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.                              */
+/******************************************************************************/
+
 package editor_plugin
 
 import (
@@ -16,36 +52,24 @@ func AddGitPluginToStorage(modulePath string) error {
 		return err
 	}
 
-	plugins, err := GetStoredGitPlugins()
+	exists, err := gitPluginAlreadyStored(modulePath)
 	if err != nil {
 		return err
 	}
-	for _, plugin := range plugins {
-		if plugin == modulePath {
-			return nil
-		}
+	if exists {
+		return nil
 	}
 
-	module := strings.Split(modulePath, "@")[0]
-	parts := strings.Split(module, "/")
-	packageName := parts[len(parts)-1]
-	folderName := "git_" + strings.NewReplacer("/", "_", "@", "_", ":", "_").Replace(modulePath)
-	folderPath := filepath.Join(plugFolder, folderName)
+	module := extractModule(modulePath)
+	author, packageName := extractAuthorAndPackage(module)
+
+	folderPath := filepath.Join(plugFolder, buildFolderName(modulePath))
 
 	if err := os.MkdirAll(folderPath, os.ModePerm); err != nil {
 		return err
 	}
 
-	cfg := PluginConfig{
-		Name:        fmt.Sprintf("Git Plugin: %s", packageName),
-		PackageName: packageName,
-		Description: fmt.Sprintf("Git plugin from %s", module),
-		Version:     0.0,
-		Author:      "Git Repository",
-		Website:     "https://" + module,
-		Enabled:     true,
-		GitModule:   modulePath,
-	}
+	cfg := buildPluginConfig(modulePath, module, author, packageName)
 
 	data, err := json.MarshalIndent(cfg, "", "  ")
 	if err != nil {
@@ -70,18 +94,12 @@ func RemoveGitPluginFromStorage(modulePath string) error {
 		if !dir.IsDir() {
 			continue
 		}
-		cfgPath := filepath.Join(plugFolder, dir.Name(), pluginConfigFile)
-		if s, err := os.Stat(cfgPath); err != nil || s.IsDir() {
-			continue
-		}
-		data, err := filesystem.ReadFile(cfgPath)
+
+		cfg, err := loadPluginConfig(plugFolder, dir.Name())
 		if err != nil {
 			continue
 		}
-		var cfg PluginConfig
-		if err := json.Unmarshal(data, &cfg); err != nil {
-			continue
-		}
+
 		if cfg.GitModule == modulePath {
 			return os.RemoveAll(filepath.Join(plugFolder, dir.Name()))
 		}
@@ -101,23 +119,18 @@ func GetStoredGitPlugins() ([]string, error) {
 		return nil, err
 	}
 
-	plugins := make([]string, 0)
+	var plugins []string
+
 	for _, dir := range dirs {
 		if !dir.IsDir() {
 			continue
 		}
-		cfgPath := filepath.Join(plugFolder, dir.Name(), pluginConfigFile)
-		if s, err := os.Stat(cfgPath); err != nil || s.IsDir() {
-			continue
-		}
-		data, err := filesystem.ReadFile(cfgPath)
+
+		cfg, err := loadPluginConfig(plugFolder, dir.Name())
 		if err != nil {
 			continue
 		}
-		var cfg PluginConfig
-		if err := json.Unmarshal(data, &cfg); err != nil {
-			continue
-		}
+
 		if cfg.GitModule != "" {
 			plugins = append(plugins, cfg.GitModule)
 		}
@@ -126,34 +139,103 @@ func GetStoredGitPlugins() ([]string, error) {
 	return plugins, nil
 }
 
+func loadPluginConfig(basePath, dirName string) (PluginConfig, error) {
+	cfgPath := filepath.Join(basePath, dirName, pluginConfigFile)
+
+	info, err := os.Stat(cfgPath)
+	if err != nil || info.IsDir() {
+		return PluginConfig{}, fmt.Errorf("invalid config")
+	}
+
+	data, err := filesystem.ReadFile(cfgPath)
+	if err != nil {
+		return PluginConfig{}, err
+	}
+
+	var cfg PluginConfig
+	if err := json.Unmarshal(data, &cfg); err != nil {
+		return PluginConfig{}, err
+	}
+
+	return cfg, nil
+}
+
+func gitPluginAlreadyStored(modulePath string) (bool, error) {
+	plugins, err := GetStoredGitPlugins()
+	if err != nil {
+		return false, err
+	}
+
+	for _, plugin := range plugins {
+		if plugin == modulePath {
+			return true, nil
+		}
+	}
+
+	return false, nil
+}
+
+func extractModule(modulePath string) string {
+	return strings.Split(modulePath, "@")[0]
+}
+
+// For a module path like "github.com/author/package@ref", this returns "author" and "package"
+func extractAuthorAndPackage(module string) (author, packageName string) {
+	parts := strings.Split(module, "/")
+	n := len(parts)
+	return parts[n-2], parts[n-1]
+}
+
+func buildFolderName(modulePath string) string {
+	replacer := strings.NewReplacer("/", "_", "@", "_", ":", "_")
+	return "git_" + replacer.Replace(modulePath)
+}
+
+func buildPluginConfig(modulePath, module, author, packageName string) PluginConfig {
+	return PluginConfig{
+		Name:        packageName,
+		PackageName: packageName,
+		Description: fmt.Sprintf("Git plugin from %s", module),
+		Version:     0.1,
+		Author:      author,
+		Website:     "https://" + module,
+		Enabled:     true,
+		GitModule:   modulePath,
+	}
+}
+
 func parseGitURL(gitURL string) (modulePath, ref string) {
-	cleanURL := strings.TrimSpace(gitURL)
-	if idx := strings.IndexAny(cleanURL, "?#"); idx != -1 {
-		cleanURL = cleanURL[:idx]
+	clean := strings.TrimSpace(gitURL)
+
+	if idx := strings.IndexAny(clean, "?#"); idx != -1 {
+		clean = clean[:idx]
 	}
 
-	if strings.HasPrefix(cleanURL, "git@") {
-		cleanURL = strings.TrimPrefix(cleanURL, "git@")
-		cleanURL = strings.Replace(cleanURL, ":", "/", 1)
+	if strings.HasPrefix(clean, "git@") {
+		clean = strings.TrimPrefix(clean, "git@")
+		clean = strings.Replace(clean, ":", "/", 1)
 	}
-	cleanURL = strings.TrimPrefix(cleanURL, "https://")
-	cleanURL = strings.TrimPrefix(cleanURL, "http://")
-	cleanURL = strings.TrimPrefix(cleanURL, "git://")
 
-	cleanURL = strings.TrimSuffix(cleanURL, ".git")
-	cleanURL = strings.TrimSuffix(cleanURL, "/")
+	clean = strings.TrimPrefix(clean, "https://")
+	clean = strings.TrimPrefix(clean, "http://")
+	clean = strings.TrimPrefix(clean, "git://")
+
+	clean = strings.TrimSuffix(clean, ".git")
+	clean = strings.TrimSuffix(clean, "/")
 
 	ref = "latest"
-	if idx := strings.LastIndex(cleanURL, "@"); idx != -1 {
-		candidate := cleanURL[idx+1:]
-		cleanURL = cleanURL[:idx]
+
+	if idx := strings.LastIndex(clean, "@"); idx != -1 {
+		candidate := clean[idx+1:]
+		clean = clean[:idx]
+
 		if candidate != "" {
 			ref = candidate
 		}
 	}
 
-	modulePath = cleanURL
-	return modulePath, ref
+	modulePath = clean
+	return
 }
 
 func AddPluginFromGit(gitURL string) (string, error) {
