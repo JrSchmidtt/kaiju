@@ -188,8 +188,7 @@
 			}
 			
 			.downloadStatus {
-				margin-top: 5px;
-				display: none;
+				margin-top: 12px;
 				font-size: 12px;
 				color: #AAA;
 			}
@@ -220,11 +219,12 @@
 					<div class="gitDownloadRow">
 						<input id="gitPluginUrl" class="gitUrlInput" type="text" 
 							   placeholder="https://github.com/username/plugin-name" />
-						<button onclick="downloadPluginFromGit">Add Plugin</button>
+						<button onclick="addPluginFromGit">Add Plugin</button>
 						</div>
-						<label id="pluginDownloadStatus" class="downloadStatus"></label>
-						<div style="margin-top: 15px; font-size: 12px; color: #777;">
-							Plugin will be added to go.mod during recompilation.<br>
+						<label id="pluginDownloadStatus" class="downloadStatus">
+							Plugin will be added to go.mod during recompilation.
+						</label>
+						<div style="margin-top: px; font-size: 12px; color: #AAA;">
 							Make sure the repo is public.
 						</div>
 					</div>

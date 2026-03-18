@@ -239,8 +239,8 @@ func (w *SettingsWorkspace) recompileEditor(*document.Element) {
 	}
 }
 
-func (w *SettingsWorkspace) downloadPluginFromGit(e *document.Element) {
-	defer tracing.NewRegion("SettingsWorkspace.downloadPluginFromGit").End()
+func (w *SettingsWorkspace) addPluginFromGit(e *document.Element) {
+	defer tracing.NewRegion("SettingsWorkspace.addPluginFromGit").End()
 
 	if w.downloadingPlugin {
 		slog.Warn("a plugin download is already in progress, please wait")
@@ -257,6 +257,7 @@ func (w *SettingsWorkspace) downloadPluginFromGit(e *document.Element) {
 		slog.Error("Git URL input element not found")
 		return
 	}
+	gitUrlElement.UI.ToInput().SetPlaceholder("Processing...")
 
 	gitURL := gitUrlElement.UI.ToInput().Text()
 	if gitURL == "" {
@@ -362,7 +363,7 @@ func (w *SettingsWorkspace) funcMap() map[string]func(*document.Element) {
 		"togglePlugin":          w.togglePlugin,
 		"clickOpenPlugins":      w.clickOpenPlugins,
 		"recompileEditor":       w.recompileEditor,
-		"downloadPluginFromGit": w.downloadPluginFromGit,
+		"addPluginFromGit":      w.addPluginFromGit,
 	}
 }
 
