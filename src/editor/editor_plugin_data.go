@@ -76,12 +76,6 @@ func (ed *Editor) RecompileWithPlugins(plugins []editor_plugin.PluginInfo, onCom
 	if err = copyEditorCodeForRecompile(to, project_file_system.EngineFS.EngineFileSystemInterface); err != nil {
 		return err
 	}
-	if !hasGoFiles(filepath.Join(to, "editor")) {
-		slog.Warn("embedded source copy is missing editor package files, retrying from disk", "source", filepath.Dir(exe))
-		if err = copyEditorCodeForRecompileFromDisk(to, filepath.Dir(exe)); err != nil {
-			return err
-		}
-	}
 	registry, err := os.OpenFile(filepath.Join(to, "editor_plugin_registry.go"), os.O_APPEND, os.ModePerm)
 	if err != nil {
 		return err
@@ -207,72 +201,4 @@ func copyEditorCodeForRecompile(to string, efs project_file_system.EngineFileSys
 	}
 	copyFolder(from)
 	return err
-}
-
-func copyEditorCodeForRecompileFromDisk(to, from string) error {
-	var err error
-	var copyFolder func(path string) error
-	os.RemoveAll(to)
-	os.MkdirAll(to, os.ModePerm)
-	copyFolder = func(path string) error {
-		relPath, _ := filepath.Rel(from, path)
-		folder := filepath.Join(to, relPath)
-		if path != from {
-			if err := os.MkdirAll(folder, os.ModePerm); err != nil {
-				return err
-			}
-		}
-		var dir []fs.DirEntry
-		if dir, err = os.ReadDir(path); err != nil {
-			return err
-		}
-		for i := range dir {
-			name := dir[i].Name()
-			entryPath := filepath.Join(path, name)
-			if dir[i].IsDir() {
-				if err := copyFolder(entryPath); err != nil {
-					return err
-				}
-				continue
-			}
-			if strings.HasPrefix(name, "__") {
-				continue
-			}
-			f, err := os.Open(entryPath)
-			if err != nil {
-				return err
-			}
-			defer f.Close()
-			t, err := os.Create(filepath.Join(folder, name))
-			if err != nil {
-				return err
-			}
-			defer t.Close()
-			if _, err := io.Copy(t, f); err != nil {
-				return err
-			}
-		}
-		return nil
-	}
-	return copyFolder(from)
-}
-
-func hasGoFiles(root string) bool {
-	entries, err := os.ReadDir(root)
-	if err != nil {
-		return false
-	}
-	for _, entry := range entries {
-		entryPath := filepath.Join(root, entry.Name())
-		if entry.IsDir() {
-			if hasGoFiles(entryPath) {
-				return true
-			}
-			continue
-		}
-		if strings.HasSuffix(entry.Name(), ".go") {
-			return true
-		}
-	}
-	return false
 }
