@@ -23,7 +23,6 @@ go.work
 
 bin/
 logs/
-docs/api
 external/bin
 interpreter/kaiju-*
 *.zip
