@@ -54,6 +54,25 @@
 			},
 			"problemMatcher": [],
 			"detail": "Generate API documentation using go doc"
+		}, {
+			"label": "Install gomarkdoc",
+			"type": "shell",
+			"command": "go",
+			"args": [
+				"install",
+				"github.com/princjef/gomarkdoc/cmd/gomarkdoc@latest"
+			],
+			"group": "build",
+			"presentation": {
+				"echo": true,
+				"reveal": "always",
+				"focus": false,
+				"panel": "shared",
+				"showReuseMessage": true,
+				"clear": false
+			},
+			"problemMatcher": [],
+			"detail": "Install gomarkdoc dependency"
 		}
 	]
 }

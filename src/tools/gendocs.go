@@ -1,233 +1,224 @@
 package main
 
 import (
-	"bufio"
 	"fmt"
+	"log/slog"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"strings"
 )
 
-type DocGenerator struct {
-	sourceDir string
-	outputDir string
-	packages  []string
-}
-
-func NewDocGenerator() *DocGenerator {
-	return &DocGenerator{
-		sourceDir: "src",
-		outputDir: "./docs/api",
-		packages: []string{
-			".", "bootstrap", "engine", "matrix", "klib", "rendering",
-			"platform/windowing", "platform/hid", "platform/audio",
-			"platform/filesystem", "engine/ui", "registry/shader_data_registry", "debug",
-		},
-	}
+type App struct {
+	srcPath  string
+	docsPath string
+	logger   *slog.Logger
 }
 
 func main() {
-	generator := NewDocGenerator()
-	generator.Generate()
-}
+	logger := slog.New(slog.NewTextHandler(os.Stdout, nil))
 
-func (g *DocGenerator) Generate() {
-	fmt.Printf("Generating docs from: %s\n", g.sourceDir)
-
-	if err := os.MkdirAll(g.outputDir, 0755); err != nil {
-		fmt.Printf("Error creating output dir: %v\n", err)
+	if len(os.Args) < 2 {
+		logger.Error("missing project path argument", "usage", os.Args[0]+" <project_path>")
 		os.Exit(1)
 	}
 
-	g.generateIndex()
+	app := NewApp(os.Args[1], logger)
 
-	successCount := 0
-	for _, pkg := range g.packages {
-		fmt.Printf("Processing: %s... ", pkg)
-		if g.generatePackageDoc(pkg) {
-			fmt.Println("✓")
-			successCount++
-		} else {
-			fmt.Println("✗")
+	if err := app.Run(); err != nil {
+		logger.Error("application failed", "error", err)
+		os.Exit(1)
+	}
+
+	logger.Info("documentation generated successfully")
+}
+
+func NewApp(srcPath string, logger *slog.Logger) *App {
+	docsPath := filepath.Join(filepath.Dir(srcPath), "docs", "api")
+	return &App{
+		srcPath:  srcPath,
+		docsPath: docsPath,
+		logger:   logger,
+	}
+}
+
+func (a *App) Run() error {
+	if err := os.MkdirAll(a.docsPath, os.ModePerm); err != nil {
+		return fmt.Errorf("error creating docs directory: %w", err)
+	}
+
+	packages, err := findPackages(a.srcPath)
+	if err != nil {
+		return err
+	}
+
+	a.printPackages(packages)
+
+	for name, path := range packages {
+		if err := a.generatePackageDoc(name, path); err != nil {
+			a.logger.Warn("failed to generate docs", "package", name, "error", err)
 		}
 	}
 
-	fmt.Printf("Generated! %d/%d packages processed.\n", successCount, len(g.packages))
+	return createIndex(packages, a.docsPath)
 }
 
-func (g *DocGenerator) generateIndex() {
-	indexPath := filepath.Join(g.outputDir, "index.md")
-	file, err := os.Create(indexPath)
-	if err != nil {
-		return
+func (a *App) printPackages(packages map[string]string) {
+	a.logger.Info("packages discovered", "count", len(packages))
+
+	for name, path := range packages {
+		a.logger.Info("package", "name", name, "path", path)
 	}
-	defer file.Close()
+}
 
-	writer := bufio.NewWriter(file)
-	defer writer.Flush()
+func (a *App) generatePackageDoc(name, path string) error {
+	outputFile := filepath.Join(a.docsPath, name+".md")
 
-	writer.WriteString("# Kaiju Engine API Documentation\n\n")
-	writer.WriteString("Auto-generated using go doc.\n\n")
+	a.logger.Info("generating docs", "package", name)
 
-	categories := g.categorizePackages()
-	for title, pkgs := range categories {
+	if err := runGomarkdoc(a.srcPath, path, outputFile); err != nil {
+		return err
+	}
+
+	a.logger.Info("generated", "file", outputFile)
+	return nil
+}
+
+func findPackages(srcPath string) (map[string]string, error) {
+	packages := make(map[string]string)
+
+	entries, err := os.ReadDir(srcPath)
+	if err != nil {
+		return nil, err
+	}
+
+	if hasGoFiles(srcPath) {
+		packages["root"] = "."
+	}
+
+	for _, entry := range entries {
+		if !entry.IsDir() {
+			continue
+		}
+
+		name := entry.Name()
+		if shouldSkip(name) {
+			continue
+		}
+
+		packagePath := filepath.Join(srcPath, name)
+		if hasGoFiles(packagePath) {
+			packages[name] = name
+		}
+	}
+
+	return packages, nil
+}
+
+func hasGoFiles(dir string) bool {
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		return false
+	}
+
+	for _, entry := range entries {
+		if !entry.IsDir() && strings.HasSuffix(entry.Name(), ".go") {
+			return true
+		}
+	}
+	return false
+}
+
+func shouldSkip(name string) bool {
+	skipDirs := map[string]struct{}{
+		".git": {}, "vendor": {}, "node_modules": {}, "build": {}, "dist": {}, "docs": {},
+		"bullet3": {}, "soloud": {}, "libs": {}, "tools": {}, "file_templates": {},
+		"generators": {}, "ollama": {}, "network": {},
+	}
+
+	_, exists := skipDirs[name]
+	return exists
+}
+
+func runGomarkdoc(srcPath, packagePath, outputFile string) error {
+	target := "."
+	if packagePath != "." {
+		target = "./" + packagePath
+	}
+
+	cmd := exec.Command("gomarkdoc", "--output", outputFile, target)
+	cmd.Dir = srcPath
+
+	output, err := cmd.CombinedOutput()
+	if err != nil {
+		return fmt.Errorf("gomarkdoc failed: %w | output: %s", err, string(output))
+	}
+
+	return nil
+}
+
+func createIndex(packages map[string]string, docsPath string) error {
+	var builder strings.Builder
+
+	builder.WriteString("# API Documentation\n\n")
+	builder.WriteString("Auto-generated documentation using gomarkdoc.\n\n")
+
+	categories := categorizePackages(packages)
+
+	order := []string{"Core", "Engine", "Platform", "Rendering", "Registry", "Other"}
+
+	for _, cat := range order {
+		pkgs := categories[cat]
 		if len(pkgs) == 0 {
 			continue
 		}
-		writer.WriteString(fmt.Sprintf("## %s\n\n", title))
+
+		builder.WriteString(fmt.Sprintf("## %s\n\n", cat))
 		for _, pkg := range pkgs {
-			link := g.getPackageLink(pkg)
-			displayName := g.getDisplayName(pkg)
-			writer.WriteString(fmt.Sprintf("- [%s](%s)\n", displayName, link))
+			displayName := pkg
+			if pkg == "root" {
+				displayName = "Root Package"
+			}
+			builder.WriteString(fmt.Sprintf("- [%s](%s.md)\n", displayName, pkg))
 		}
-		writer.WriteString("\n")
+		builder.WriteString("\n")
 	}
+
+	indexFile := filepath.Join(docsPath, "index.md")
+	return os.WriteFile(indexFile, []byte(builder.String()), 0644)
 }
 
-func (g *DocGenerator) categorizePackages() map[string][]string {
+func categorizePackages(packages map[string]string) map[string][]string {
 	categories := map[string][]string{
 		"Core":      {},
 		"Engine":    {},
 		"Platform":  {},
 		"Rendering": {},
+		"Registry":  {},
 		"Other":     {},
 	}
 
-	for _, pkg := range g.packages {
-		switch {
-		case g.isCorePackage(pkg):
-			categories["Core"] = append(categories["Core"], pkg)
-		case strings.HasPrefix(pkg, "engine"):
-			categories["Engine"] = append(categories["Engine"], pkg)
-		case strings.HasPrefix(pkg, "platform"):
-			categories["Platform"] = append(categories["Platform"], pkg)
-		case g.isRenderingPackage(pkg):
-			categories["Rendering"] = append(categories["Rendering"], pkg)
-		default:
-			categories["Other"] = append(categories["Other"], pkg)
-		}
+	for name := range packages {
+		category := categorize(name)
+		categories[category] = append(categories[category], name)
 	}
 
 	return categories
 }
 
-func (g *DocGenerator) isCorePackage(pkg string) bool {
-	return pkg == "." || pkg == "bootstrap" || pkg == "matrix" || pkg == "klib"
-}
-
-func (g *DocGenerator) isRenderingPackage(pkg string) bool {
-	return strings.HasPrefix(pkg, "rendering") || strings.HasPrefix(pkg, "registry")
-}
-
-func (g *DocGenerator) getPackageLink(pkg string) string {
-	if pkg == "." {
-		return "root.md"
+func categorize(packageName string) string {
+	switch {
+	case packageName == "bootstrap":
+		return "Core"
+	case strings.HasPrefix(packageName, "engine"):
+		return "Engine"
+	case strings.HasPrefix(packageName, "platform"):
+		return "Platform"
+	case packageName == "rendering":
+		return "Rendering"
+	case strings.Contains(packageName, "registry"):
+		return "Registry"
+	default:
+		return "Other"
 	}
-	return strings.ReplaceAll(pkg, "/", "_") + ".md"
-}
-
-func (g *DocGenerator) getDisplayName(pkg string) string {
-	if pkg == "." {
-		return "root"
-	}
-	return pkg
-}
-
-func (g *DocGenerator) generatePackageDoc(pkg string) bool {
-	output, err := g.executeGoDoc(pkg)
-	if err != nil {
-		return false
-	}
-
-	filename := g.getPackageLink(pkg)
-	filePath := filepath.Join(g.outputDir, filename)
-
-	file, err := os.Create(filePath)
-	if err != nil {
-		return false
-	}
-	defer file.Close()
-
-	writer := bufio.NewWriter(file)
-	defer writer.Flush()
-
-	g.writePackageHeader(writer, pkg)
-	g.convertDocToMarkdown(writer, string(output))
-
-	return true
-}
-
-func (g *DocGenerator) executeGoDoc(pkg string) ([]byte, error) {
-	relativePkg := "./" + pkg
-	if pkg == "." {
-		relativePkg = "."
-	}
-
-	cmd := exec.Command("go", "doc", "-all", relativePkg)
-	cmd.Dir = g.sourceDir
-	return cmd.Output()
-}
-
-func (g *DocGenerator) writePackageHeader(writer *bufio.Writer, pkg string) {
-	displayName := g.getDisplayName(pkg)
-	writer.WriteString(fmt.Sprintf("# Package %s\n\n", displayName))
-
-	importPath := "kaijuengine.com"
-	if pkg != "." {
-		importPath += "/" + pkg
-	}
-	writer.WriteString(fmt.Sprintf("**Import path:** `%s`\n\n", importPath))
-}
-
-func (g *DocGenerator) convertDocToMarkdown(writer *bufio.Writer, output string) {
-	lines := strings.Split(output, "\n")
-	inCodeBlock := false
-
-	for _, line := range lines {
-		if strings.HasPrefix(line, "package ") {
-			continue
-		}
-
-		if g.isCodeLine(line) {
-			if !inCodeBlock {
-				writer.WriteString("```go\n")
-				inCodeBlock = true
-			}
-			writer.WriteString(strings.TrimPrefix(line, "\t") + "\n")
-		} else {
-			if inCodeBlock {
-				writer.WriteString("```\n\n")
-				inCodeBlock = false
-			}
-			g.writeFormattedLine(writer, line)
-		}
-	}
-
-	if inCodeBlock {
-		writer.WriteString("```\n")
-	}
-}
-
-func (g *DocGenerator) isCodeLine(line string) bool {
-	return strings.HasPrefix(line, "\t") || (len(line) > 0 && strings.HasPrefix(line, "    "))
-}
-
-func (g *DocGenerator) writeFormattedLine(writer *bufio.Writer, line string) {
-	if g.isHeaderLine(line) {
-		writer.WriteString(fmt.Sprintf("## %s\n\n", strings.Title(strings.ToLower(line))))
-	} else if g.isDeclarationLine(line) {
-		writer.WriteString("### " + line + "\n\n")
-	} else {
-		writer.WriteString(line + "\n")
-	}
-}
-
-func (g *DocGenerator) isHeaderLine(line string) bool {
-	return line != "" && strings.ToUpper(line) == line && !strings.Contains(line, " ") && len(line) > 1
-}
-
-func (g *DocGenerator) isDeclarationLine(line string) bool {
-	return strings.HasPrefix(line, "func ") || strings.HasPrefix(line, "type ") ||
-		strings.HasPrefix(line, "var ") || strings.HasPrefix(line, "const ")
 }

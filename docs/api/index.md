@@ -1,32 +1,26 @@
-# Kaiju Engine API Documentation
+# API Documentation
 
-Auto-generated using go doc.
-
-## Other
-
-- [debug](debug.md)
+Auto-generated documentation using gomarkdoc.
 
 ## Core
 
-- [root](root.md)
 - [bootstrap](bootstrap.md)
-- [matrix](matrix.md)
-- [klib](klib.md)
 
 ## Engine
 
 - [engine](engine.md)
-- [engine/ui](engine_ui.md)
-
-## Platform
-
-- [platform/windowing](platform_windowing.md)
-- [platform/hid](platform_hid.md)
-- [platform/audio](platform_audio.md)
-- [platform/filesystem](platform_filesystem.md)
 
 ## Rendering
 
 - [rendering](rendering.md)
-- [registry/shader_data_registry](registry_shader_data_registry.md)
+
+## Other
+
+- [framework](framework.md)
+- [klib](klib.md)
+- [Root Package](root.md)
+- [debug](debug.md)
+- [editor](editor.md)
+- [matrix](matrix.md)
+- [plugins](plugins.md)
 

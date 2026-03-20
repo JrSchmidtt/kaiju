@@ -60,6 +60,20 @@
 				"CGO_ENABLED": "1"
 			},
 			"console": "integratedTerminal",
+			"showLog": true,
+			"preLaunchTask": "Install gomarkdoc"
+		}, {
+			"name": "Install Dependencies and Generate Docs",
+			"type": "go",
+			"request": "launch",
+			"mode": "auto",
+			"program": "${workspaceFolder}/src/tools/install_and_generate_docs.go",
+			"args": ["${workspaceFolder}/src"],
+			"cwd": "${workspaceFolder}",
+			"env": {
+				"CGO_ENABLED": "1"
+			},
+			"console": "integratedTerminal",
 			"showLog": true
 		}, {
 			"name": "Copy Headers",
