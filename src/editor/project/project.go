@@ -45,6 +45,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"slices"
 	"strings"
 	"sync/atomic"
@@ -364,10 +365,25 @@ func (p *Project) Run(args ...string) {
 	}
 	target := ""
 	for i := range files {
-		if filepath.Ext(files[i].Name()) == ".dat" {
+		fileName := files[i].Name()
+		if filepath.Ext(fileName) == ".dat" {
 			continue
 		}
-		target = files[i].Name()
+		// Check if it's an executable file
+		if runtime.GOOS == "windows" {
+			if filepath.Ext(fileName) == ".exe" {
+				target = fileName
+				break
+			}
+		} else {
+			// On Unix-like systems, look for files without extension (typically executables)
+			if filepath.Ext(fileName) == "" {
+				if info, err := files[i].Info(); err == nil && info.Mode()&0111 != 0 {
+					target = fileName
+					break
+				}
+			}
+		}
 	}
 	if target == "" {
 		slog.Error("failed to run, could not find the executable file")

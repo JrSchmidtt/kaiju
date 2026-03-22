@@ -56,7 +56,9 @@ extern "C" {
 	// Steam User Stats                                                       //
 	////////////////////////////////////////////////////////////////////////////
 	bool c_SteamUserStats_RequestCurrentStats() {
-		return SteamUserStats()->RequestCurrentStats();
+		// Note: RequestCurrentStats() is no longer required and has been removed from Steam API
+		// The Steam client now automatically synchronizes stats before game launch
+		return true;
 	}
 
 	////////////////////////////////////////////////////////////////////////////
