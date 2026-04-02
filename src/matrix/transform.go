@@ -95,7 +95,12 @@ func (t *Transform) Parent() *Transform  { return t.parent }
 func (t *Transform) Position() Vec3      { return t.relativePosition }
 
 func (t *Transform) IsDirty() bool {
-	return t.frameDirty
+	if !t.frameDirty {
+		return false
+	}
+	return !t.framePosition.Equals(t.position) ||
+		!t.frameRotation.Equals(t.rotation) ||
+		!t.frameScale.Equals(t.scale)
 }
 
 func (t *Transform) Right() Vec3 {
